@@ -1,0 +1,237 @@
+//Board IDE: ESP32 Dev Module
+//Board Hardware: ESP DOIT, harus di config Bluetooth dulu baru connect
+#include <Adafruit_Sensor.h>
+#include "BluetoothSerial.h"
+#include "EEPROM.h"
+#define EEPROM_SIZE 50
+#include <WiFi.h>
+#include <PZEM004T.h>
+#include <DHT.h>
+#include <DHT_U.h>
+#define DHTPIN 22
+#define DHTTYPE DHT22
+#define MODE 4
+#define modeWF 18
+#define modeBT 19
+#define buzzer 32
+#define proxim 12
+#define rainse 13
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+#endif
+BluetoothSerial SerialBT;
+PZEM004T* pzem;
+IPAddress ipPower(192, 168, 1, 1);
+DHT dht (DHTPIN, DHTTYPE);
+int addr = 0;
+String dataArray [3];
+const char* ssid;// = "Metrasat";
+const char* pass;// = "M3TR45AT";
+//const char* host = "iot.telkomsat.net";
+IPAddress host(103, 10, 145, 6);
+boolean bluetoothOn = false;
+float v, i, p, e, h, t;
+int px, r, x, y;
+
+void bacaEEPROM() {
+  if (!EEPROM.begin(EEPROM_SIZE))
+  {
+    Serial.println("failed to initialise EEPROM"); delay(1000000);
+  }
+  int ptr = 0;
+  dataArray[ptr] = "";
+  for (int i = 0; i < EEPROM_SIZE; i++)
+  {
+    if (char (EEPROM.read(i)) == ';') {
+      ptr++;
+      dataArray[ptr] = "";
+    }
+    else {
+      dataArray[ptr] += char (EEPROM.read(i));
+    }
+  }
+  ssid = dataArray[0].c_str();
+  pass = dataArray[1].c_str();
+  Serial.println(ssid);
+  Serial.println(pass);
+  Serial.println();
+}
+
+void connectWiFi() {
+  Serial.printf("Connecting to %s ", ssid);
+  WiFi.begin(ssid, pass);
+  unsigned long timeout = 10000;
+  unsigned long starttimeout = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+    if (millis() - starttimeout >= timeout) break;
+  }
+  Serial.println(" CONNECTED");
+}
+
+void setup() {
+  Serial.begin(115200);
+  pzem = new PZEM004T(&Serial2);
+  pzem->setAddress(ipPower);
+  dht.begin();
+  pinMode (MODE, INPUT_PULLUP);
+  pinMode (proxim, INPUT_PULLUP);
+  pinMode (rainse, INPUT_PULLUP);
+  pinMode (modeBT, OUTPUT);
+  pinMode (modeWF, OUTPUT);
+  pinMode (buzzer, OUTPUT);
+  bacaEEPROM();
+  connectWiFi();
+  Serial.println("Ini void Setup");
+}
+
+void loop() {
+  if (digitalRead (MODE) == HIGH) {
+    SerialBT.begin("BAKTI_08");
+    delay(2000);
+    digitalWrite(modeBT, HIGH);
+    digitalWrite(modeWF, LOW);
+    Serial.println("BT NYALA");
+    int a = 0;
+    unsigned long timeout1 = 60000;
+    unsigned long starttimeout1 = millis();
+    while (millis() - starttimeout1 <= timeout1) {
+      digitalWrite(buzzer, HIGH);
+      a++;
+      Serial.print("ini timeout ");
+      Serial.println(a);
+      delay(100);
+      digitalWrite(buzzer, LOW);
+      delay(1000);
+      if (SerialBT.available()) {
+        while (SerialBT.available()) {
+          char val = (char) SerialBT.read();
+          EEPROM.write(addr, val);
+          addr++;
+        }
+        for (int i = addr; i < EEPROM_SIZE; i++)
+        {
+          EEPROM.write(i, 0);
+        }
+        addr = 0;
+        EEPROM.commit();
+        digitalWrite(buzzer, HIGH); delay(1000);
+        digitalWrite(buzzer, LOW); delay(500);
+        digitalWrite(buzzer, HIGH); delay(100);
+        digitalWrite(buzzer, LOW); delay(50);
+        digitalWrite(buzzer, HIGH); delay(100);
+        digitalWrite(buzzer, LOW); delay(1000);
+        bacaEEPROM();
+        connectWiFi();
+        starttimeout1 = timeout1;
+        SerialBT.end();
+        Serial.println("Password SSID disimpan & BT mati");
+        a = 0;
+      }
+    }
+    a = 0;
+    while (millis() - starttimeout1 >= timeout1) {
+      digitalWrite(buzzer, HIGH);
+      delay(300);
+      digitalWrite(buzzer, LOW);
+      delay(200);
+      digitalWrite(buzzer, HIGH);
+      delay(300);
+      digitalWrite(buzzer, LOW);
+      delay(200);
+      digitalWrite(buzzer, HIGH);
+      delay(300);
+      digitalWrite(buzzer, LOW);
+      delay(1000);
+      Serial.println("Waktu transfer Password SSID telah habis");
+      break;
+    }
+  }
+
+  if (digitalRead (MODE) == LOW) {
+    SerialBT.end();
+    delay(3000);
+    Serial.println("BT Mati");
+    digitalWrite(modeBT, LOW);
+    digitalWrite(modeWF, HIGH);
+    Serial.print("connecting to ");
+    Serial.println(host);
+
+    // Use WiFiClient class to create TCP connections
+    WiFiClient client;
+    const int httpPort = 80;
+    if (!client.connect(host, httpPort)) {
+      Serial.println("connection failed");
+      return;
+    }
+    v = pzem->voltage(ipPower);
+    i = pzem->current(ipPower);
+    p = pzem->power(ipPower);
+    e = pzem->energy(ipPower);
+    h = dht.readHumidity();
+    t = dht.readTemperature();
+    px = digitalRead(proxim);
+    r = digitalRead(rainse);
+    if (v < 0) {
+      v = 0;
+    }
+    if (i < 0) {
+      i = 0;
+    }
+    if (p < 0) {
+      p = 0;
+    }
+    if (e < 0) {
+      e = 0;
+    }
+    if (px == 0) {
+      x = 1;
+    } else {
+      x = 0;
+    }
+    if (r == 0) {
+      y = 1;
+    } else {
+      y = 0;
+    }
+    // Make a HTTP request:
+    //  BAKTI
+    String postData = "{\"value\":\"" + String(v) + ";" + String(i) + ";" + String(p) + ";" + String(e) + ";" + String(t) + ";" + String(h) + ";" + String(x) + ";" + String(y) + "\"}";
+    Serial.println(postData);
+    Serial.println("connected");
+    // Make a HTTP request:
+    client.println("POST /bakti/api/thing/log HTTP/1.1");
+    client.print("Host: ");
+    client.println(host);
+    client.println("Content-Type: application/json");
+    client.println("Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI1ZDFjOTFiYjk4ZWEwMThmZDdlODg5YzEiLCJjb2RlIjoiVFNBVE1XLzIwMTkwNzEwLzAwNi9CR1IiLCJpYXQiOjE1NjI3NDU0MDB9.tymByhYGAfCxyUi7S7MiX57ACu2wZW21hBfM1_Mnxc8");
+    client.println("Connection: close");
+    client.print("Content-Length: ");
+    client.println(postData.length());
+    client.println();
+    client.println(postData);
+    client.println();
+    unsigned long timeout2 = millis();
+    while (client.available() == 0) {
+      if (millis() - timeout2 > 5000) {
+        Serial.println(">>> Client Timeout !");
+        client.stop();
+        digitalWrite(buzzer, HIGH);
+        delay(100);
+        digitalWrite(buzzer, LOW);
+        delay(3000);
+        return;
+      }
+    }
+
+    // Read all the lines of the reply from server and print them to Serial
+    while (client.available()) {
+      Serial.print((char) client.read());
+      digitalWrite(modeWF, LOW);
+    }
+    Serial.println();
+    Serial.println("closing connection");
+    Serial.println();
+  }
+}
